@@ -1,73 +1,83 @@
 <?php
-/* ExternalRedirect - MediaWiki extension to allow redirects to external sites.
+/**
+ * ExternalRedirect - MediaWiki extension to allow redirects to external sites.
  * Copyright (C) 2013-2022 Davis Mosenkovs
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
- * http://www.gnu.org/copyleft/gpl.html
+ * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
-if(!defined('MEDIAWIKI'))
-    die();
+use MediaWiki\Output\OutputPage;
+use MediaWiki\Parser\Parser;
+use MediaWiki\Parser\ParserOutput;
+use MediaWiki\Skin\Skin;
 
-$wgExtensionCredits[ 'parserhook' ][] = array(
-    'path' => __FILE__,
-    'name' => 'ExternalRedirect',
-    'author' => 'Davis Mosenkovs',
-    'url' => 'https://www.mediawiki.org/wiki/Extension:ExternalRedirect',
-    'description' => 'Allows to make redirects to external websites',
-    'version' => '1.2.1',
-);
-
-$wgExtensionMessagesFiles['ExternalRedirect'] = dirname( __FILE__ ) . '/ExternalRedirect.i18n.php';
-
-/*** Default configuration ***/
-// Array with NUMERIC namespace IDs where external redirection should be allowed.
-$wgExternalRedirectNsIDs = array();
-
-// Better avoid. Array with page names (see magic word {{FULLPAGENAME}}) where external redirection should be allowed.
-$wgExternalRedirectPages = array();
-
-// Avoid or be extremely careful. Use whitelisting approach and very precise expressions. PCRE regex used to determine whether redirection to particular target URL is allowed.
-$wgExternalRedirectURLRegex = '';
-
-// Whether to display link to redirection URL (along with error message) in case externalredirect is used where it is not allowed.
-$wgExternalRedirectDeniedShowURL = false;
-/*****************************/
-
-$wgHooks['ParserFirstCallInit'][] = 'wfExternalRedirectParserInit';
-
-function wfExternalRedirectParserInit( Parser $parser ) {
-    $parser->setFunctionHook( 'externalredirect', 'wfExternalRedirectRender');
-    return true;
+if ( !defined( 'MEDIAWIKI' ) ) {
+    exit;
 }
 
-function wfExternalRedirectRender($parser, $url = '') {
-    global $wgCommandLineMode, $wgExternalRedirectNsIDs, $wgExternalRedirectPages, $wgExternalRedirectURLRegex, $wgExternalRedirectDeniedShowURL;
-    $parser->getOutput()->updateCacheExpiry(0);
-    if(!wfParseUrl($url) || strpos($url, chr(13))!==false || strpos($url, chr(10))!==false || strpos($url, chr(0))!==false) {
-        return wfMessage('externalredirect-invalidurl')->text();
+/**
+ * Hooks and parser-function implementation for ExternalRedirect.
+ * Loaded through extension.json's AutoloadClasses.
+ */
+class ExternalRedirectHooks {
+    private const EXTENSION_DATA_KEY = 'ExternalRedirect-target-url';
+
+    /** Register {{#externalredirect:URL}}. */
+    public static function onParserFirstCallInit( Parser $parser ): bool {
+        $parser->setFunctionHook( 'externalredirect', [ self::class, 'render' ] );
+        return true;
     }
-    if((in_array($parser->getTitle()->getNamespace(), $wgExternalRedirectNsIDs, true) 
-      || in_array($parser->getTitle()->getPrefixedText(), $wgExternalRedirectPages, true))
-      && ($wgExternalRedirectURLRegex==='' || preg_match($wgExternalRedirectURLRegex, $url)===1)) {
-        if($wgCommandLineMode!==true) {
-            header('Location: '.$url);
+
+    /**
+     * Validate a target and store it for the output hook to redirect later.
+     * Redirecting directly from a parser callback is too early/unreliable.
+     */
+    public static function render( Parser $parser, string $url = '' ): string {
+        global $wgExternalRedirectNsIDs, $wgExternalRedirectPages;
+        global $wgExternalRedirectURLRegex, $wgExternalRedirectDeniedShowURL;
+
+        $parserOutput = $parser->getOutput();
+        $parserOutput->updateCacheExpiry( 0 );
+        $title = $parser->getTitle();
+
+        $parts = parse_url( $url );
+        $validUrl = is_array( $parts )
+            && isset( $parts['scheme'], $parts['host'] )
+            && in_array( strtolower( $parts['scheme'] ), [ 'http', 'https' ], true )
+            && filter_var( $url, FILTER_VALIDATE_URL ) !== false
+            && !preg_match( '/[\x00-\x1F\x7F]/', $url );
+
+        if ( !$validUrl ) {
+            return wfMessage( 'externalredirect-invalidurl' )->text();
         }
-        return wfMessage('externalredirect-text', $url)->text();
-    } else {
-        return wfMessage('externalredirect-denied')->text().($wgExternalRedirectDeniedShowURL 
-          ? ' '.wfMessage('externalredirect-denied-url', $url)->text() : "");
+
+        $pageAllowed = $title && (
+            in_array( $title->getNamespace(), (array)$wgExternalRedirectNsIDs, true )
+            || in_array( $title->getPrefixedText(), (array)$wgExternalRedirectPages, true )
+        );
+
+        $urlAllowed = true;
+        if ( $wgExternalRedirectURLRegex !== '' ) {
+            $urlAllowed = @preg_match( $wgExternalRedirectURLRegex, $url ) === 1;
+        }
+
+        if ( $pageAllowed && $urlAllowed ) {
+            // This data is carried with ParserOutput to the response phase.
+            $parserOutput->setExtensionData( self::EXTENSION_DATA_KEY, $url );
+            return '';
+        }
+
+        $message = wfMessage( 'externalredirect-denied' )->text();
+        if ( $wgExternalRedirectDeniedShowURL ) {
+            $message .= ' ' . wfMessage( 'externalredirect-denied-url', $url )->text();
+        }
+        return $message;
+    }
+
+    /** Perform the redirect after parser output is attached to the response. */
+    public static function onOutputPageParserOutput( OutputPage $out, ParserOutput $parserOutput ): void {
+        $url = $parserOutput->getExtensionData( self::EXTENSION_DATA_KEY );
+        if ( is_string( $url ) && $url !== '' ) {
+            $out->redirect( $url, '302' );
+        }
     }
 }
