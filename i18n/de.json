@@ -1,0 +1,7 @@
+{
+  "externalredirect-desc": "Ermöglicht Weiterleitungen von Seiten zu externen Webseiten",
+  "externalredirect-text": "Diese Seite leitet auf die folgende externe Webseite um: [$1 $1]",
+  "externalredirect-invalidurl": "== ExternalRedirect-Fehler ==\nDie Weiterleitungs-URL ist ungültig.",
+  "externalredirect-denied": "== ExternalRedirect-Fehler ==\nExterne Weiterleitungen sind für diesen Namensraum, diese Seite oder URL nicht aktiviert.",
+  "externalredirect-denied-url": "Vorgesehene Weiterleitungs-URL: [$1 $1]"
+}
