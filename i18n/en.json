@@ -1,0 +1,10 @@
+{
+  "externalredirect-desc": "Allows pages to redirect to external websites",
+  "externalredirect-text": "This page redirects to an external site: [$1 $1]",
+  "externalredirect-invalidurl": "== ExternalRedirect Error ==\nRedirection URL is invalid.",
+  "externalredirect-denied": "== ExternalRedirect Error ==\nExternal redirection is not enabled for this namespace, page or URL.",
+  "externalredirect-denied-url": "Intended redirection URL: [$1 $1]",
+  "magic-words": {
+    "en": [ "externalredirect", "0", "externalredirect" ]
+  }
+}
